@@ -356,9 +356,6 @@
 
                 <label for="ans_deadlineDatetime">ANS Deadline DateTime</label>
                 <input type="datetime-local" id="ans_deadlineDatetime" placeholder="Enter deadline datetime">
-
-                <label for="ans_bearer">ANS Bearer Token</label>
-                <input type="text" id="ans_bearer" placeholder="Ans bearer token">
             </div>
         </details>
 
@@ -569,22 +566,6 @@
             document.getElementById('loadingMessage').classList.remove('show');
         }
 
-        function loadANSBearer() {
-            const savedBearer = localStorage.getItem(ANS_BEARER_KEY);
-            if (savedBearer) {
-                document.getElementById('ans_bearer').value = savedBearer;
-                console.log('ANS bearer token loaded from localStorage');
-            }
-        }
-
-        function saveANSBearer() {
-            const bearerValue = document.getElementById('ans_bearer').value;
-            if (bearerValue) {
-                localStorage.setItem(ANS_BEARER_KEY, bearerValue);
-                console.log('ANS bearer token saved to localStorage');
-            }
-        }
-
         /**
          * Populates the Settings section fields from localStorage
          */
@@ -650,7 +631,6 @@
             saveOrClearStorage(ANS_BEARER_KEY, fields.ansBearer);
 
             document.getElementById('orion_email').value = fields.email;
-            document.getElementById('ans_bearer').value = fields.ansBearer;
             document.getElementById('currentUser').textContent = fields.email;
         }
 
@@ -891,9 +871,6 @@
 
                     document.getElementById('ans_openDatetime').value = formatDatetimeLocal(nowDate);
                     document.getElementById('ans_deadlineDatetime').value = formatDatetimeLocal(deadlineDate);
-
-                    // Load saved bearer token
-                    loadANSBearer();
 
                     document.getElementById('ansForm').style.display = 'block';
                     document.getElementById('ans_openDatetime').focus();
@@ -1302,10 +1279,7 @@
             const openDatetime = document.getElementById('ans_openDatetime').value;
             const deadlineDatetime = document.getElementById('ans_deadlineDatetime').value;
             const duration = parseInt(document.getElementById('ans_duration').value);
-            const bearer = document.getElementById('ans_bearer').value;
-
-            // Save bearer to localStorage
-            saveANSBearer();
+            const bearer = localStorage.getItem(ANS_BEARER_KEY) || '';
 
             if (!email || !openDatetime || !deadlineDatetime || !bearer) {
                 showResult('Please fill in all required fields', false, 'ans');
