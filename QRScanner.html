@@ -877,7 +877,7 @@
                 // Check if this is ANS format or Orion format
                 if (data.ans) {
                     // ANS format
-                    document.getElementById('ans_studentEmail').value = data.studentEmail;
+                    document.getElementById('ans_studentEmail').value = data.studentEmail || data.email;
                     document.getElementById('ans_assignmentId').value = data.ans.assignment_id;
                     document.getElementById('ans_deadline').value = data.ans.deadline;
                     document.getElementById('ans_duration').value = data.ans.duration;
