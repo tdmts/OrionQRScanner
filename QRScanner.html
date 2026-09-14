@@ -376,7 +376,7 @@
         // CONFIGURATION - API URLs and Storage Keys
         // ====================================================================
 
-        const APP_VERSION = '2026-09-03 20:59'; // Build timestamp. Set to the current date and time when releasing.
+        const APP_VERSION = '2026-09-14 15:55'; // Build timestamp. Set to the current date and time when releasing.
 
         const ANS_BEARER_KEY = 'ans_bearer_token'; // Do not change. Used for localStorage key.
         const GRADER_EMAIL_KEY = 'grader_email'; // Do not change. Used for localStorage key.
@@ -698,17 +698,10 @@
                 return;
             }
 
-            if (!fields.secret) {
+            if (fields.getBearerUrl && !fields.secret) {
                 document.getElementById('settingsSection').open = true;
-                showError('Please enter your secret under Settings');
-                logDebug('Settings validation failed: secret is missing');
-                return;
-            }
-
-            if (!isValidUrl(fields.getBearerUrl)) {
-                document.getElementById('settingsSection').open = true;
-                showError('Please enter the Get Bearer URL under Settings');
-                logDebug('Settings validation failed: Get Bearer URL is missing/invalid');
+                showError('Please enter your secret under Settings, or clear the Get Bearer URL to skip Orion login');
+                logDebug('Settings validation failed: Get Bearer URL is set but secret is missing');
                 return;
             }
 
@@ -720,56 +713,63 @@
             await authenticateUser(fields.email, fields.secret);
         }
 
+        /**
+         * Signs the grader in and shows the scanner. Orion login (Get Bearer +
+         * whoami) is best-effort: the scanner is shown regardless of whether it
+         * succeeds, so ANS scanning always works even if Orion isn't configured
+         * or is unreachable.
+         */
         async function authenticateUser(email, secret) {
             // Save email and secret for future use
             localStorage.setItem(GRADER_EMAIL_KEY, email);
             localStorage.setItem(GRADER_SECRET_KEY, secret);
 
-            showLoading('Validating email and getting authorization...');
-            clearError();
+            document.getElementById('orion_email').value = email;
+            document.getElementById('currentUser').textContent = email;
+            cachedBearer = null;
 
-            try {
-                logDebug(`Requesting bearer token for ${email}...`);
-                const bearer = await getBearer(email, secret);
-                if (!bearer) {
-                    logDebug('No bearer token received - aborting');
+            if (!getBearerEndpoint()) {
+                logDebug('No Get Bearer URL configured - skipping Orion login, ANS scanning still available');
+            } else {
+                showLoading('Validating email and getting authorization...');
+                clearError();
+
+                try {
+                    logDebug(`Requesting bearer token for ${email}...`);
+                    const bearer = await getBearer(email, secret);
+                    if (!bearer) {
+                        logDebug('No bearer token received - continuing without Orion access');
+                    } else {
+                        logDebug('Bearer token received');
+
+                        // Verify bearer works with whoami call
+                        logDebug('Verifying bearer token via whoami...');
+                        const whoamiData = await getWhoami(bearer);
+                        if (!whoamiData) {
+                            logDebug('Whoami verification failed - continuing without Orion access');
+                        } else {
+                            logDebug('Whoami verified: ' + whoamiData.UniqueName);
+                            cachedBearer = bearer;
+                            console.log('User authenticated:', whoamiData.UniqueName);
+                        }
+                    }
+                } catch (error) {
+                    logDebug('Orion authentication error - continuing without Orion access: ' + error.message);
+                } finally {
                     hideLoading();
-                    return false;
                 }
-                logDebug('Bearer token received');
-
-                // Verify bearer works with whoami call
-                logDebug('Verifying bearer token via whoami...');
-                const whoamiData = await getWhoami(bearer);
-                if (!whoamiData) {
-                    logDebug('Whoami verification failed - aborting');
-                    hideLoading();
-                    return false;
-                }
-                logDebug('Whoami verified: ' + whoamiData.UniqueName);
-
-                cachedBearer = bearer;
-                document.getElementById('orion_email').value = email;
-                document.getElementById('currentUser').textContent = email;
-
-                hideLoading();
-                console.log('User authenticated:', whoamiData.UniqueName);
-                logDebug('Authentication successful');
-
-                // Hide email setup and show scanner
-                document.getElementById('emailSetup').style.display = 'none';
-                document.getElementById('scannerSection').style.display = 'block';
-                loadSettingsFields();
-                logDebug('Scanner section shown');
-
-                startScanner();
-                return true;
-            } catch (error) {
-                hideLoading();
-                showError('Authentication failed: ' + error.message);
-                logDebug('Authentication error: ' + error.message);
-                return false;
             }
+
+            logDebug(cachedBearer ? 'Orion authorization available' : 'Continuing without Orion authorization (ANS scanning still works)');
+
+            // Hide email setup and show scanner
+            document.getElementById('emailSetup').style.display = 'none';
+            document.getElementById('scannerSection').style.display = 'block';
+            loadSettingsFields();
+            logDebug('Scanner section shown');
+
+            startScanner();
+            return true;
         }
         
         function changeUser() {
@@ -876,7 +876,8 @@
                     // Orion format - use cached bearer (already validated)
                     const bearer = cachedBearer;
                     if (!bearer) {
-                        showError('Authorization token not available. Please refresh and try again.');
+                        showError('Orion authorization not available. Configure the Get Bearer URL and your secret under Settings, then use Change User to sign in again.');
+                        logDebug('Orion QR scan rejected: no Orion bearer available');
                         return;
                     }
 
@@ -1382,8 +1383,7 @@
             document.getElementById('appVersion').textContent = 'Build ' + APP_VERSION;
             loadSettingsFields();
             if (!getBearerEndpoint()) {
-                logDebug('No Get Bearer URL configured - opening Settings');
-                document.getElementById('settingsSection').open = true;
+                logDebug('No Get Bearer URL configured - Orion login will be skipped');
             }
 
             const autoSuccess = await tryAutoLogin();
