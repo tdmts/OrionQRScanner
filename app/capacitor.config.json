@@ -1,0 +1,10 @@
+{
+  "appId": "be.hogent.orionscanner",
+  "appName": "Orion Scanner",
+  "webDir": "www",
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}

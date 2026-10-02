@@ -1,0 +1,20 @@
+{
+  "name": "orion-scanner-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Capacitor app: scans ANS QR codes and schedules tests via native HTTP (no CORS).",
+  "scripts": {
+    "copy-libs": "node scripts/copy-libs.js",
+    "sync": "npm run copy-libs && cap sync",
+    "test": "node --test tests/ans.test.js"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/ios": "^8.5.2",
+    "html5-qrcode": "^2.3.8"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.2"
+  }
+}

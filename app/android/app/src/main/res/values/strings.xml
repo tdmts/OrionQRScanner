@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Orion Scanner</string>
+    <string name="title_activity_main">Orion Scanner</string>
+    <string name="package_name">be.hogent.orionscanner</string>
+    <string name="custom_url_scheme">be.hogent.orionscanner</string>
+</resources>
