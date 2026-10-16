@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<!--
+  The template of every QR code page in a course. OrionSync renders it per course for each "qr"
+  topic in a course repo's orion.json (src/qr.js there): TITLE in double braces becomes the topic
+  title and CONFIG in double braces the contents of the code, with the orgUnitId of the course and
+  the Id of the grade item filled in. This file itself is never published.
+
+  The code the page shows is what QRScanner.html reads:
+    an Orion assignment  { studentEmail, orion: { orgUnitId, gradeId, assignmentShortname, studentId } }
+    an ANS test          { studentEmail, ans: { assignment_id, deadline, duration, ioem } }
+-->
+<html lang="nl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{TITLE}}</title>
+    <link rel="stylesheet" href="https://tdmts.github.io/OrionCSS/style.css">
+    <script src="https://tdmts.github.io/OrionCSS/main.js"></script>
+</head>
+<body>
+<div class="container">
+<h1>{{TITLE}}</h1>
+<p id="status">QR code laden...</p>
+<div class="text-center">
+<div id="qrcode"></div>
+<p id="label" class="mt-3 mb-0"></p>
+<p id="email" class="text-muted"></p>
+</div>
+</div>
+<script type="application/json" id="qr-config">{{CONFIG}}</script>
+<script>
+    const QR = JSON.parse(document.getElementById('qr-config').textContent);
+    const QR_SIZE = 300;
+    const status = document.getElementById('status');
+
+    // Who is looking: the page is served by Orion, so the session of the student goes along.
+    fetch('/d2l/api/lp/1.28/users/whoami')
+        .then((response) => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return response.json();
+        })
+        .then((whoami) => {
+            const studentEmail = whoami.UniqueName;
+            if (!studentEmail) throw new Error('no e-mail address in whoami');
+            const data = QR.ans
+                ? { studentEmail, ans: QR.ans }
+                : { studentEmail, orion: { ...QR.orion, studentId: whoami.Identifier } };
+
+            const img = document.createElement('img');
+            img.src = `https://api.qrserver.com/v1/create-qr-code/?size=${QR_SIZE}x${QR_SIZE}&data=${encodeURIComponent(JSON.stringify(data))}`;
+            img.alt = `QR code voor ${QR.label}`;
+            img.className = 'img-fluid';
+            img.onerror = () => { status.textContent = 'De QR code kon niet gemaakt worden.'; };
+            document.getElementById('qrcode').replaceChildren(img);
+            document.getElementById('label').textContent = QR.label;
+            document.getElementById('email').textContent = studentEmail;
+            status.textContent = '';
+        })
+        .catch((error) => {
+            console.error('whoami failed:', error);
+            status.textContent = 'Je gegevens konden niet geladen worden. Open deze pagina in Orion terwijl je aangemeld bent.';
+        });
+</script>
+</body>
+</html>
