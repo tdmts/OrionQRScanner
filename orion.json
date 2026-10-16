@@ -14,7 +14,10 @@
           "title": "QR-test",
           "qr": {
             "grade": "Introductie (!)"
-          }
+          },
+          "courses": [
+            8608
+          ]
         }
       ]
     }
