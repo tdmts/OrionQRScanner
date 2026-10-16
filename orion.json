@@ -1,0 +1,11 @@
+{
+  "modules": [
+    {
+      "id": "qr-scanner",
+      "title": "QR-scanner",
+      "items": [
+        { "id": "qr-scanner-pagina", "title": "QR-scanner: scannen en punten geven", "page": "QRScanner.html" }
+      ]
+    }
+  ]
+}

@@ -223,23 +223,15 @@
 
     <div id="reader"></div>
 
-        <div id="emailSetup" style="display: block;">
-        <p>Configure your email, secret and endpoints under ⚙️ Settings below, then tap Start Scanning.</p>
-        <button onclick="validateEmailAndStart()">Start Scanning</button>
+    <div id="startSetup" style="display: block;">
+        <p>Not signed in to Orion here, so only ANS codes can be scanned. To grade Orion assignments,
+            open this page from its Orion course while you are signed in to Orion.</p>
+        <button onclick="startSession()">Start Scanning</button>
     </div>
 
     <details id="settingsSection" style="margin-bottom: 15px;" ontoggle="if (this.open) loadSettingsFields()">
         <summary>⚙️ Settings</summary>
         <div class="expandable-content">
-            <label for="settings_email">Your Email</label>
-            <input type="email" id="settings_email" placeholder="Enter your email address">
-
-            <label for="settings_secret">Your Secret</label>
-            <input type="password" id="settings_secret" placeholder="Enter your secret">
-
-            <label for="settings_getBearerUrl">Get Bearer URL</label>
-            <input type="text" id="settings_getBearerUrl" placeholder="Get Bearer flow URL">
-
             <label for="settings_ansStartTestUrl">ANS Start Test URL</label>
             <input type="text" id="settings_ansStartTestUrl" placeholder="ANS Start Test flow URL">
 
@@ -258,10 +250,7 @@
     </div>
 
     <div id="scannerSection" style="display: none;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <span>Scanning as: <strong id="currentUser"></strong></span>
-            <button onclick="changeUser()" style="padding: 5px 10px; font-size: 12px; width: auto;">Change User</button>
-        </div>
+        <p style="margin-bottom: 10px;">Scanning as: <strong id="currentUser"></strong></p>
     </div>
 
     <div id="orionForm" style="display: none;">
@@ -295,9 +284,6 @@
                         <input type="number" id="orion_assignmentId">
                     </div>
                 </div>
-
-                                <label>Your e-mail</label>
-                <input type="email" id="orion_email" placeholder="Enter your email">
             </div>
         </details>
 
@@ -376,13 +362,21 @@
         // CONFIGURATION - API URLs and Storage Keys
         // ====================================================================
 
-        const APP_VERSION = '2026-09-14 15:55'; // Build timestamp. Set to the current date and time when releasing.
+        const APP_VERSION = '2026-10-15 13:10'; // Build timestamp. Set to the current date and time when releasing.
 
         const ANS_BEARER_KEY = 'ans_bearer_token'; // Do not change. Used for localStorage key.
-        const GRADER_EMAIL_KEY = 'grader_email'; // Do not change. Used for localStorage key.
-        const GRADER_SECRET_KEY = 'grader_secret'; // Do not change. Used for localStorage key.
-        const GET_BEARER_URL_KEY = 'get_bearer_url'; // Do not change. Used for localStorage key.
         const ANS_START_TEST_URL_KEY = 'ans_start_test_url'; // Do not change. Used for localStorage key.
+
+        // Orion is called with the grader's own Orion session, so this page grades only when it is
+        // served by Orion itself (OrionSync mirrors it into a course). It used to get a bearer token
+        // from the Get Bearer flow with an email and a secret; that flow now admits only its owner.
+        // These keys held that login and are removed on load, so no secret lingers in the browser.
+        const RETIRED_KEYS = ['grader_email', 'grader_secret', 'get_bearer_url'];
+
+        // Brightspace keeps the session's XSRF token in localStorage under this key, on its own
+        // origin. A call that changes something (the PUT of a grade) must send it as X-Csrf-Token.
+        const XSRF_KEY = 'XSRF.Token';
+        const ORION_API = '/d2l/api'; // relative: same origin as the page, so the session cookie goes along
 
         // ====================================================================
         // CONSTANTS
@@ -397,7 +391,7 @@
         // ====================================================================
 
         let html5QrCode;
-        let cachedBearer = null;
+        let orionUser = null; // whoami of the Orion session, or null when the page has none
 
         // ====================================================================
         // UTILITY FUNCTIONS
@@ -489,14 +483,6 @@
         }
 
         /**
-         * Gets the Get Bearer flow URL. localStorage is the only source; there is no default
-         * @returns {string} The Get Bearer flow URL, or '' when it has not been configured
-         */
-        function getBearerEndpoint() {
-            return localStorage.getItem(GET_BEARER_URL_KEY) || '';
-        }
-
-        /**
          * Gets the ANS Start Test flow URL. localStorage is the only source; there is no default
          * @returns {string} The ANS Start Test flow URL, or '' when it has not been configured
          */
@@ -568,9 +554,6 @@
          * Populates the Settings section fields from localStorage
          */
         function loadSettingsFields() {
-            document.getElementById('settings_email').value = localStorage.getItem(GRADER_EMAIL_KEY) || '';
-            document.getElementById('settings_secret').value = localStorage.getItem(GRADER_SECRET_KEY) || '';
-            document.getElementById('settings_getBearerUrl').value = getBearerEndpoint();
             document.getElementById('settings_ansStartTestUrl').value = getAnsStartTestEndpoint();
             document.getElementById('settings_ansBearer').value = localStorage.getItem(ANS_BEARER_KEY) || '';
         }
@@ -580,12 +563,9 @@
          * On invalid input, reports the error and returns null.
          * @param {string} formType - Where to report a validation error: 'settings' (inline in the
          *   Settings section) or anything else (the top-level error banner, opening Settings first)
-         * @returns {{email: string, secret: string, getBearerUrl: string, ansStartTestUrl: string, ansBearer: string}|null}
+         * @returns {{ansStartTestUrl: string, ansBearer: string}|null}
          */
         function readAndValidateSettingsFields(formType) {
-            const email = document.getElementById('settings_email').value.trim();
-            const secret = document.getElementById('settings_secret').value.trim();
-            const getBearerUrl = document.getElementById('settings_getBearerUrl').value.trim();
             const ansStartTestUrl = document.getElementById('settings_ansStartTestUrl').value.trim();
             const ansBearer = document.getElementById('settings_ansBearer').value.trim();
 
@@ -598,38 +578,21 @@
                 }
             };
 
-            if (email && !isValidEmail(email)) {
-                reportError('Please enter a valid email address');
-                return null;
-            }
-
-            if (getBearerUrl && !isValidUrl(getBearerUrl)) {
-                reportError('Get Bearer URL is not a valid URL');
-                return null;
-            }
-
             if (ansStartTestUrl && !isValidUrl(ansStartTestUrl)) {
                 reportError('ANS Start Test URL is not a valid URL');
                 return null;
             }
 
-            return { email, secret, getBearerUrl, ansStartTestUrl, ansBearer };
+            return { ansStartTestUrl, ansBearer };
         }
 
         /**
-         * Saves validated Settings fields to localStorage, and syncs the fields
-         * elsewhere on the page that mirror the same values
-         * @param {{email: string, secret: string, getBearerUrl: string, ansStartTestUrl: string, ansBearer: string}} fields
+         * Saves validated Settings fields to localStorage
+         * @param {{ansStartTestUrl: string, ansBearer: string}} fields
          */
         function persistSettingsFields(fields) {
-            saveOrClearStorage(GRADER_EMAIL_KEY, fields.email);
-            saveOrClearStorage(GRADER_SECRET_KEY, fields.secret);
-            saveOrClearStorage(GET_BEARER_URL_KEY, fields.getBearerUrl);
             saveOrClearStorage(ANS_START_TEST_URL_KEY, fields.ansStartTestUrl);
             saveOrClearStorage(ANS_BEARER_KEY, fields.ansBearer);
-
-            document.getElementById('orion_email').value = fields.email;
-            document.getElementById('currentUser').textContent = fields.email;
         }
 
         /**
@@ -641,7 +604,7 @@
 
             persistSettingsFields(fields);
             logDebug('Local settings updated via Settings section');
-            showResult('Settings saved. Use Change User if you updated the email or secret.', true, 'settings');
+            showResult('Settings saved.', true, 'settings');
         }
 
         /**
@@ -680,111 +643,34 @@
         // ====================================================================
 
         /**
-         * Validates the email input and starts the authentication process
+         * Looks for an Orion session on this page's origin. There is one only when Orion serves
+         * the page and the grader is signed in to Orion in this browser.
+         * @returns {Promise<Object|null>} The whoami of the session, or null
          */
-        async function validateEmailAndStart() {
-            logDebug('Start Scanning clicked');
-
-            const fields = readAndValidateSettingsFields('setup');
-            if (!fields) {
-                logDebug('Settings validation failed (invalid email/URL format)');
-                return;
+        async function checkOrionSession() {
+            try {
+                const response = await fetchWithTimeout(`${ORION_API}/lp/1.43/users/whoami`);
+                logDebug(`Session whoami response status: ${response.status}`);
+                if (!response.ok) return null;
+                const data = await response.json(); // a page outside Orion answers 404 or HTML
+                return data.UniqueName ? data : null;
+            } catch (e) {
+                logDebug('No Orion session: ' + e.message);
+                return null;
             }
-
-            if (!fields.email) {
-                document.getElementById('settingsSection').open = true;
-                showError('Please enter your email address under Settings');
-                logDebug('Settings validation failed: email is missing');
-                return;
-            }
-
-            if (fields.getBearerUrl && !fields.secret) {
-                document.getElementById('settingsSection').open = true;
-                showError('Please enter your secret under Settings, or clear the Get Bearer URL to skip Orion login');
-                logDebug('Settings validation failed: Get Bearer URL is set but secret is missing');
-                return;
-            }
-
-            logDebug('Settings validated');
-
-            persistSettingsFields(fields);
-            logDebug('Settings saved to localStorage');
-
-            await authenticateUser(fields.email, fields.secret);
         }
 
         /**
-         * Signs the grader in and shows the scanner. Orion login (Get Bearer +
-         * whoami) is best-effort: the scanner is shown regardless of whether it
-         * succeeds, so ANS scanning always works even if Orion isn't configured
-         * or is unreachable.
+         * Shows the scanner and starts it. Without an Orion session only ANS codes can be handled.
          */
-        async function authenticateUser(email, secret) {
-            // Save email and secret for future use
-            localStorage.setItem(GRADER_EMAIL_KEY, email);
-            localStorage.setItem(GRADER_SECRET_KEY, secret);
-
-            document.getElementById('orion_email').value = email;
-            document.getElementById('currentUser').textContent = email;
-            cachedBearer = null;
-
-            if (!getBearerEndpoint()) {
-                logDebug('No Get Bearer URL configured - skipping Orion login, ANS scanning still available');
-            } else {
-                showLoading('Validating email and getting authorization...');
-                clearError();
-
-                try {
-                    logDebug(`Requesting bearer token for ${email}...`);
-                    const bearer = await getBearer(email, secret);
-                    if (!bearer) {
-                        logDebug('No bearer token received - continuing without Orion access');
-                    } else {
-                        logDebug('Bearer token received');
-
-                        // Verify bearer works with whoami call
-                        logDebug('Verifying bearer token via whoami...');
-                        const whoamiData = await getWhoami(bearer);
-                        if (!whoamiData) {
-                            logDebug('Whoami verification failed - continuing without Orion access');
-                        } else {
-                            logDebug('Whoami verified: ' + whoamiData.UniqueName);
-                            cachedBearer = bearer;
-                            console.log('User authenticated:', whoamiData.UniqueName);
-                        }
-                    }
-                } catch (error) {
-                    logDebug('Orion authentication error - continuing without Orion access: ' + error.message);
-                } finally {
-                    hideLoading();
-                }
-            }
-
-            logDebug(cachedBearer ? 'Orion authorization available' : 'Continuing without Orion authorization (ANS scanning still works)');
-
-            // Hide email setup and show scanner
-            document.getElementById('emailSetup').style.display = 'none';
+        function startSession() {
+            document.getElementById('currentUser').textContent = orionUser
+                ? orionUser.UniqueName
+                : 'nobody in Orion (ANS only)';
+            document.getElementById('startSetup').style.display = 'none';
             document.getElementById('scannerSection').style.display = 'block';
-            loadSettingsFields();
             logDebug('Scanner section shown');
-
             startScanner();
-            return true;
-        }
-        
-        function changeUser() {
-            cleanup();
-            cachedBearer = null;
-            document.getElementById('emailSetup').style.display = 'block';
-            document.getElementById('scannerSection').style.display = 'none';
-            document.getElementById('orionForm').style.display = 'none';
-            document.getElementById('ansForm').style.display = 'none';
-            document.getElementById('reader').style.display = 'none';
-            hideResult('orion');
-            hideResult('ans');
-            clearError();
-            document.getElementById('settingsSection').open = true;
-            document.getElementById('settings_email').focus();
         }
 
         // ====================================================================
@@ -838,10 +724,6 @@
             }
         }
 
-        function cleanup() {
-            stopScanner();
-        }
-
         async function onScanSuccess(decodedText) {
             await stopScanner();
             document.getElementById('reader').style.display = 'none';
@@ -850,9 +732,6 @@
             try {
                 const data = JSON.parse(decodedText);
                 logDebug('QR Scanned: ' + JSON.stringify(data));
-
-                                                                // Use the already validated email and bearer
-                const graderEmail = document.getElementById('orion_email').value;
 
                 // Check if this is ANS format or Orion format
                 if (data.ans) {
@@ -873,11 +752,10 @@
                     document.getElementById('ansForm').style.display = 'block';
                     document.getElementById('ans_openDatetime').focus();
                                                 } else if (data.orion) {
-                    // Orion format - use cached bearer (already validated)
-                    const bearer = cachedBearer;
-                    if (!bearer) {
-                        showError('Orion authorization not available. Configure the Get Bearer URL and your secret under Settings, then use Change User to sign in again.');
-                        logDebug('Orion QR scan rejected: no Orion bearer available');
+                    // Orion format - graded with the grader's own Orion session
+                    if (!orionUser) {
+                        showError('This page has no Orion session, so it cannot grade. Open it from its Orion course while you are signed in to Orion.');
+                        logDebug('Orion QR scan rejected: no Orion session');
                         return;
                     }
 
@@ -887,7 +765,7 @@
                             // Get assignment ID from name
                             showLoading('Getting assignment information...');
                             logDebug(`Starting lookup for Course: ${courseId}, ID: ${data.orion.gradeId}, ShortName: ${assignmentShortname}`);
-                            const gradeObject = await getGradeObject(bearer, data.orion);
+                            const gradeObject = await getGradeObject(data.orion);
                             hideLoading();
                             
                             if (gradeObject) {
@@ -937,112 +815,47 @@
         // ====================================================================
 
         /**
-         * Retrieves a bearer token from the authentication service
-         * @param {string} email - The user's email address
-         * @param {string} secret - The user's grader secret
-         * @returns {Promise<string|null>} The bearer token or null on error
+         * Gets the XSRF token of the Orion session. Brightspace puts it in localStorage when one
+         * of its own pages loads in this browser; when none has yet, Orion hands it out itself.
+         * @returns {Promise<string>} The token
          */
-        async function getBearer(email, secret) {
-            const bearerEndpoint = getBearerEndpoint();
-            if (!bearerEndpoint) {
-                showError('No Get Bearer URL configured. Set it under Settings.');
-                return null;
+        async function getXsrfToken() {
+            const stored = localStorage.getItem(XSRF_KEY);
+            if (stored) return stored;
+            logDebug('No XSRF token in localStorage - asking Orion for one');
+            const response = await fetchWithTimeout('/d2l/lp/auth/xsrf-tokens');
+            if (!response.ok) {
+                throw new Error('Orion gave no XSRF token: ' + await describeHttpError(response));
             }
-
-            try {
-                logDebug(`POST ${bearerEndpoint}`);
-                const response = await fetchWithTimeout(bearerEndpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        email: email,
-                        secret: secret
-                    })
-                });
-                logDebug(`Get Bearer response status: ${response.status}`);
-
-                if (response.ok) {
-                    const data = await response.json();
-                    if (!data.Bearer) {
-                        showError('The Get Bearer flow returned an empty token for ' + email + '. That means no row in BrightspaceTokens.xlsx matches this email + secret, or its AccessToken cell is empty.');
-                        return null;
-                    }
-                    return data.Bearer;
-                } else {
-                    showError('Error getting bearer token: ' + await describeHttpError(response));
-                    return null;
-                }
-            } catch (err) {
-                showError('Error getting bearer token: ' + err.message);
-                return null;
-            }
+            const data = await response.json();
+            if (!data.referrerToken) throw new Error('Orion gave an empty XSRF token');
+            return data.referrerToken;
         }
 
         /**
-         * Gets the current user's information from Orion API
-         * @param {string} bearer - The bearer authentication token
-         * @returns {Promise<Object|null>} User data object or null on error
+         * Calls the Orion API with the grader's session. The cookie goes along because the
+         * page has the same origin; a call that changes something also carries the XSRF token.
+         * @param {string} path - Path under /d2l/api, starting with a slash
+         * @param {Object} options - Fetch options
+         * @returns {Promise<Response>} The fetch response
          */
-        async function getWhoami(bearer) {
-            try {
-                if (!bearer) {
-                    throw new Error('Bearer token is required for call');
-                }
-
-                const whoamiUrl = 'https://orion.hogent.be/d2l/api/lp/1.43/users/whoami';
-                logDebug('--- Whoami request (reproduce in Postman) ---');
-                logDebug('Method: GET');
-                logDebug('URL: ' + whoamiUrl);
-                logDebug('Header: Authorization: Bearer ' + bearer);
-                logDebug('Header: Content-Type: application/json');
-                logDebug(`curl -X GET '${whoamiUrl}' -H 'Authorization: Bearer ${bearer}' -H 'Content-Type: application/json'`);
-                logDebug('--- end Whoami request ---');
-
-                const response = await fetchWithTimeout(whoamiUrl, {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${bearer}`,
-                        'Content-Type': 'application/json'
-                    }
-                });
-                logDebug(`Whoami response status: ${response.status}`);
-
-                if (response.ok) {
-                    const data = await response.json();
-                    return data;
-                } else {
-                    const detail = await describeHttpError(response);
-                    if (response.status === 401) {
-                        showError('Orion rejected the bearer token (' + detail + '). The AccessToken stored for this account is expired or malformed - it needs refreshing in BrightspaceTokens.xlsx.');
-                    } else if (response.status === 403) {
-                        showError('Orion accepted the bearer token but refused the call (' + detail + '). The token is valid, so this is a scope or permission problem: the stored token was minted without the scopes whoami needs (core:*:*), or this account lacks Brightspace API access.');
-                    } else {
-                        showError('Error getting user info: ' + detail);
-                    }
-                    return null;
-                }
-            } catch (err) {
-                showError('Error getting user info: ' + err.message);
-                return null;
+        async function orionFetch(path, options = {}) {
+            const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+            if (options.method && options.method !== 'GET') {
+                headers['X-Csrf-Token'] = await getXsrfToken();
             }
+            return fetchWithTimeout(ORION_API + path, { ...options, headers, credentials: 'same-origin' });
         }
 
         /**
          * Retrieves grade/assignment object from Orion API
          * Tries multiple lookup strategies: by ID first, then by ShortName
          * Also fetches category information if available
-         * @param {string} bearer - The bearer authentication token
          * @param {Object} orionData - Object containing orgUnitId, gradeId, assignmentShortname
          * @returns {Promise<Object|null>} Grade object with assignment details or null if not found
          */
-        async function getGradeObject(bearer, orionData) {
+        async function getGradeObject(orionData) {
             try {
-                if (!bearer) {
-                    throw new Error('Bearer token is required for call');
-                }
-
                 const noreplace_courseId = orionData.orgUnitId;
                 const targetShortname = orionData.assignmentShortname;
                 const targetId = orionData.gradeId;
@@ -1051,15 +864,9 @@
 
                 // 1. Try to fetch by ID first if available
                 if (targetId) {
-                    const url = `https://orion.hogent.be/d2l/api/le/1.86/${noreplace_courseId}/grades/${targetId}`;
-                    logDebug(`Fetching direct ID: ${url}`);
-                    const response = await fetchWithTimeout(url, {
-                        method: 'GET',
-                        headers: {
-                            'Authorization': `Bearer ${bearer}`,
-                            'Content-Type': 'application/json'
-                        }
-                    });
+                    const path = `/le/1.86/${noreplace_courseId}/grades/${targetId}`;
+                    logDebug(`Fetching direct ID: ${path}`);
+                    const response = await orionFetch(path);
 
                     logDebug(`Direct fetch status: ${response.status} ${response.statusText}`);
                     if (response.ok) {
@@ -1071,13 +878,7 @@
                 // 2. If not found (or no ID), try to find by ShortName
                 if (!grade && targetShortname) {
                     logDebug(`Searching by ShortName: ${targetShortname}`);
-                    const response = await fetchWithTimeout(`https://orion.hogent.be/d2l/api/le/1.86/${noreplace_courseId}/grades/`, {
-                        method: 'GET',
-                        headers: {
-                            'Authorization': `Bearer ${bearer}`,
-                            'Content-Type': 'application/json'
-                        }
-                    });
+                    const response = await orionFetch(`/le/1.86/${noreplace_courseId}/grades/`);
 
                     if (response.ok) {
                         const allGrades = await response.json();
@@ -1094,16 +895,10 @@
                 if (grade) {
                     grade.CategoryName = null; // Initialize property to ensure it appears in logs
                     if (grade.CategoryId && grade.CategoryId > 0) {
-                        const catUrl = `https://orion.hogent.be/d2l/api/le/1.86/${noreplace_courseId}/grades/categories/${grade.CategoryId}`;
+                        const catUrl = `/le/1.86/${noreplace_courseId}/grades/categories/${grade.CategoryId}`;
                         logDebug(`Fetching category info for CategoryId: ${grade.CategoryId}`);
                         try {
-                            const catResponse = await fetchWithTimeout(catUrl, {
-                                method: 'GET',
-                                headers: {
-                                    'Authorization': `Bearer ${bearer}`,
-                                    'Content-Type': 'application/json'
-                                }
-                            });
+                            const catResponse = await orionFetch(catUrl);
 
                             if (catResponse.ok) {
                                 const category = await catResponse.json();
@@ -1139,7 +934,6 @@
 
         /**
          * Submits a grade to the Orion/Brightspace API
-         * @param {string} bearer - The bearer authentication token
          * @param {number} noreplace_courseId - The course ID
          * @param {number} noreplace_assignmentId - The assignment/grade object ID
          * @param {number} noreplace_userId - The student user ID
@@ -1147,7 +941,7 @@
          * @param {string} comment - Optional comment (will be sanitized)
          * @returns {Promise<Object>} Object with success boolean and data/error
          */
-        async function submitGradeToOrion(bearer, noreplace_courseId, noreplace_assignmentId, noreplace_userId, score, comment) {
+        async function submitGradeToOrion(noreplace_courseId, noreplace_assignmentId, noreplace_userId, score, comment) {
             try {
                 // Sanitize the comment to prevent XSS
                 const sanitizedComment = sanitizeHtml(comment || "");
@@ -1165,17 +959,13 @@
                     }
                 };
 
-                const url = `https://orion.hogent.be/d2l/api/le/1.86/${noreplace_courseId}/grades/${noreplace_assignmentId}/values/${noreplace_userId}`;
+                const path = `/le/1.86/${noreplace_courseId}/grades/${noreplace_assignmentId}/values/${noreplace_userId}`;
 
-                logDebug(`Submitting grade to: ${url}`);
+                logDebug(`Submitting grade to: ${path}`);
                 logDebug(`Data: Score=${score}, Comment=${comment ? 'Yes' : 'No'}`);
 
-                const response = await fetchWithTimeout(url, {
+                const response = await orionFetch(path, {
                     method: 'PUT',
-                    headers: {
-                        'Authorization': `Bearer ${bearer}`,
-                        'Content-Type': 'application/json'
-                    },
                     body: JSON.stringify(gradeData)
                 });
 
@@ -1246,15 +1036,13 @@
             showLoading('Submitting grade...');
 
             try {
-                const bearer = cachedBearer;
-
-                if (!bearer) {
+                if (!orionUser) {
                     hideLoading();
-                    showResult('Error: Authorization token not available', false);
+                    showResult('Error: no Orion session on this page', false);
                     return;
                 }
 
-                const result = await submitGradeToOrion(bearer, courseId, assignmentId, userId, score, comment);
+                const result = await submitGradeToOrion(courseId, assignmentId, userId, score, comment);
 
                 hideLoading();
                 if (result.success) {
@@ -1329,71 +1117,27 @@
             }
         }
 
-        /**
-         * Attempts to automatically authenticate user based on existing session
-         * Falls back to manual email entry if auto-login fails
-         * @returns {Promise<boolean>} True if auto-login succeeded
-         */
-        async function tryAutoLogin() {
-            logDebug('Checking for an existing Brightspace session...');
-
-            // Hide setup initially
-            document.getElementById('emailSetup').style.display = 'none';
-            showLoading('Checking user session...');
-
-            try {
-                const response = await fetchWithTimeout('/d2l/api/lp/1.43/users/whoami');
-                logDebug(`Session whoami response status: ${response.status}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data.UniqueName) {
-                        logDebug('Existing session detected for: ' + data.UniqueName);
-                        const savedSecret = localStorage.getItem(GRADER_SECRET_KEY);
-                        if (savedSecret) {
-                            logDebug('Saved secret found - attempting auto-login');
-                            console.log('Auto-detected user:', data.UniqueName);
-                            return await authenticateUser(data.UniqueName, savedSecret);
-                        }
-                        logDebug('No saved secret - falling back to manual entry');
-                        document.getElementById('settings_email').value = data.UniqueName;
-                        document.getElementById('settingsSection').open = true;
-                    }
-                } else {
-                    logDebug('No existing Brightspace session');
-                }
-            } catch (e) {
-                logDebug('Auto-login check failed: ' + e.message);
-                console.log('Auto-login check failed:', e);
-            }
-
-            // If we get here, auto-login failed
-            hideLoading();
-            document.getElementById('emailSetup').style.display = 'block';
-            logDebug('Auto-login did not complete - showing manual setup');
-            return false;
-        }
-
         // ====================================================================
         // INITIALIZATION
         // ====================================================================
 
-        // Load saved email on page load
         window.onload = async function() {
             logDebug('Page loaded - Build ' + APP_VERSION);
             document.getElementById('appVersion').textContent = 'Build ' + APP_VERSION;
+            RETIRED_KEYS.forEach((key) => localStorage.removeItem(key));
             loadSettingsFields();
-            if (!getBearerEndpoint()) {
-                logDebug('No Get Bearer URL configured - Orion login will be skipped');
-            }
 
-            const autoSuccess = await tryAutoLogin();
+            document.getElementById('startSetup').style.display = 'none';
+            showLoading('Checking Orion session...');
+            orionUser = await checkOrionSession();
+            hideLoading();
 
-            if (!autoSuccess) {
-                if (!localStorage.getItem(GRADER_EMAIL_KEY)) {
-                    document.getElementById('settingsSection').open = true;
-                }
-                document.getElementById('settings_email').focus();
-                logDebug('Waiting for manual Start Scanning');
+            if (orionUser) {
+                logDebug('Orion session for ' + orionUser.UniqueName);
+                startSession();
+            } else {
+                logDebug('No Orion session - ANS only, waiting for Start Scanning');
+                document.getElementById('startSetup').style.display = 'block';
             }
         }
     </script>
